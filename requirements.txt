@@ -1,0 +1,14 @@
+prefect==2.20.5
+duckdb==1.0.0
+pandas==2.1.4
+sqlalchemy==2.0.23
+fastapi==0.110.0
+uvicorn==0.29.0
+streamlit==1.32.0
+plotly==5.20.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+minio==7.1.16
+pyyaml==6.0.1
+pytest==8.1.1
+great-expectations==0.1.19

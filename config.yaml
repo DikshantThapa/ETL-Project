@@ -1,0 +1,11 @@
+database:
+  url: "duckdb:///./data/bronze/warehouse.duckdb"
+minio:
+  endpoint: "localhost:9000"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+paths:
+  raw_employee: "data/raw/employee.csv"
+  raw_timesheet: "data/raw/timesheet.csv"
+etl:
+  grace_minutes: 5

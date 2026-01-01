@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+data/raw/*.csv
+.env
+.DS_Store
+.gitignore

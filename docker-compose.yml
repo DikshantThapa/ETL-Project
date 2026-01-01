@@ -1,0 +1,10 @@
+services:
+  api:
+    build: .
+    ports: ["8000:8000"]
+    env_file: .env
+    volumes: [".:/app"]
+  viz:
+    build: .
+    command: streamlit run src/viz/dashboard.py --server.port 8501
+    ports: ["8501:8501"]
