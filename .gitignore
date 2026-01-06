@@ -4,3 +4,5 @@ data/raw/*.csv
 .env
 .DS_Store
 .gitignore
+./gitignore
+./venv/
