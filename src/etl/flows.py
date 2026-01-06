@@ -1,209 +1,145 @@
-# src/etl/flows.py
 import logging
-from datetime import datetime
-from prefect import flow, task
-from prefect.logging import get_run_logger
-import pandas as pd
-from sqlalchemy import create_engine, text
 from pathlib import Path
-import glob
+import pandas as pd
+import duckdb
+from datetime import datetime
 
-from .config import config
-
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ==================== EXTRACT TASKS ====================
+from src.etl.config import config
 
-@task(retries=2, retry_delay_seconds=10, name="Extract Employee CSV")
-def extract_employees():
-    """Extract employee.csv with proper delimiter"""
-    log = get_run_logger()
-    try:
-        emp_file = list(Path(config.DATA_RAW_PATH).glob("employee*.csv"))[0]
-        log.info(f"Reading {emp_file}")
-        
-        df = pd.read_csv(
-            emp_file,
-            delimiter='|',
-            quotechar='"',
-            dtype={'client_employee_id': str, 'manager_employee_id': str}
-        )
-        
-        # Initial cleaning
-        df.columns = df.columns.str.strip()
-        df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
-        
-        log.info(f"✓ Extracted {len(df)} employee records")
+class ETLPipeline:
+    def __init__(self):
+        self.conn = duckdb.connect(config.DB_PATH)
+        logger.info(f"Connected to DuckDB: {config.DB_PATH}")
+    
+    def extract_employees(self):
+        """Extract employee CSV"""
+        logger.info("📥 Extracting employees...")
+        emp_file = list(config.DATA_RAW_PATH.glob("employee*.csv"))[0]
+        df = pd.read_csv(emp_file, sep='|', quotechar='"')
+        df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
+        logger.info(f"✓ Extracted {len(df)} employee records")
         return df
-    except Exception as e:
-        log.error(f"✗ Employee extraction failed: {str(e)}")
-        raise
-
-@task(retries=2, retry_delay_seconds=10, name="Extract Timesheet CSVs")
-def extract_timesheets():
-    """Extract all timesheet*.csv files and concatenate"""
-    log = get_run_logger()
-    try:
-        ts_files = sorted(Path(config.DATA_RAW_PATH).glob("timesheet*.csv"))
-        log.info(f"Found {len(ts_files)} timesheet files: {[f.name for f in ts_files]}")
+    
+    def extract_timesheets(self):
+        """Extract & concatenate timesheet CSVs"""
+        logger.info("📥 Extracting timesheets...")
+        ts_files = sorted(config.DATA_RAW_PATH.glob("timesheet*.csv"))
+        logger.info(f"Found {len(ts_files)} timesheet files: {[f.name for f in ts_files]}")
         
         dfs = []
         for ts_file in ts_files:
-            log.info(f"Reading {ts_file.name}...")
-            df = pd.read_csv(
-                ts_file,
-                delimiter='|',
-                quotechar='"',
-                dtype={'client_employee_id': str}
-            )
-            df.columns = df.columns.str.strip()
+            logger.info(f"Reading {ts_file.name}...")
+            df = pd.read_csv(ts_file, sep='|', quotechar='"', low_memory=False)
+            df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
             dfs.append(df)
+            logger.info(f"  ✓ {ts_file.name}: {len(df)} records")
         
         result = pd.concat(dfs, ignore_index=True)
-        log.info(f"✓ Extracted {len(result)} timesheet records from {len(ts_files)} files")
+        logger.info(f"✓ Extracted {len(result)} timesheet records from {len(ts_files)} files")
         return result
-    except Exception as e:
-        log.error(f"✗ Timesheet extraction failed: {str(e)}")
-        raise
-
-# ==================== LOAD TASKS ====================
-
-@task(retries=2, retry_delay_seconds=10, name="Load to BRONZE")
-def load_to_bronze(emp_df, ts_df):
-    """Load raw data to PostgreSQL bronze layer"""
-    log = get_run_logger()
-    try:
-        engine = create_engine(config.DATABASE_URL)
+    
+    def load_bronze(self, emp_df, ts_df):
+        """Load raw data to BRONZE layer (DuckDB)"""
+        logger.info("📤 Loading to BRONZE layer...")
+        self.conn.execute("DROP TABLE IF EXISTS bronze_employees")
+        self.conn.execute("DROP TABLE IF EXISTS bronze_timesheets")
         
-        # Drop existing bronze tables (for fresh runs)
-        with engine.connect() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS bronze_timesheets CASCADE"))
-            conn.execute(text("DROP TABLE IF EXISTS bronze_employees CASCADE"))
-            conn.commit()
+        self.conn.register("temp_emp", emp_df)
+        self.conn.execute("CREATE TABLE bronze_employees AS SELECT * FROM temp_emp")
+        self.conn.unregister("temp_emp")
+        logger.info(f"✓ Loaded {len(emp_df)} to bronze_employees")
         
-        # Load employees
-        emp_df.to_sql('bronze_employees', engine, if_exists='replace', index=False)
-        log.info(f"✓ Loaded {len(emp_df)} employees to BRONZE")
+        self.conn.register("temp_ts", ts_df)
+        self.conn.execute("CREATE TABLE bronze_timesheets AS SELECT * FROM temp_ts")
+        self.conn.unregister("temp_ts")
+        logger.info(f"✓ Loaded {len(ts_df)} to bronze_timesheets")
+    
+    def transform_employees(self, emp_df):
+        """Clean & validate employee data"""
+        logger.info("🔄 Transforming employees...")
         
-        # Load timesheets
-        ts_df.to_sql('bronze_timesheets', engine, if_exists='replace', index=False, chunksize=5000)
-        log.info(f"✓ Loaded {len(ts_df)} timesheets to BRONZE")
+        # Make a copy to avoid SettingWithCopyWarning
+        emp_df = emp_df.copy()
         
-        engine.dispose()
-    except Exception as e:
-        log.error(f"✗ BRONZE load failed: {str(e)}")
-        raise
-
-# ==================== TRANSFORM TASKS ====================
-
-@task(name="Transform Employees → SILVER")
-def transform_employees(emp_df):
-    """Clean and validate employee data"""
-    log = get_run_logger()
-    try:
         # Remove duplicates
         emp_df = emp_df.drop_duplicates(subset=['client_employee_id'], keep='first')
-        log.info(f"✓ Removed duplicates → {len(emp_df)} records")
         
         # Fix date columns
-        for col in ['hire_date', 'term_date', 'dob', 'job_start_date']:
+        for col in ['hire_date', 'term_date', 'dob']:
             if col in emp_df.columns:
                 emp_df[col] = pd.to_datetime(emp_df[col], errors='coerce')
         
-        # Clean nulls
-        emp_df['active_status'] = emp_df['active_status'].fillna(1)
-        emp_df['fte_status'] = emp_df['fte_status'].fillna('Unknown')
+        # Add derived columns
+        emp_df['is_active'] = emp_df['term_date'].isna().astype(int)
+        emp_df['tenure_days'] = (emp_df['term_date'].fillna(pd.Timestamp.now().normalize()) - emp_df['hire_date']).dt.days
         
-        # Derived columns
-        emp_df['is_active'] = (emp_df['term_date'].isna()).astype(int)
-        emp_df['tenure_days'] = (
-            (emp_df['term_date'].fillna(datetime.now()) - emp_df['hire_date']).dt.days
-        )
-        
-        log.info(f"✓ Transformed {len(emp_df)} employee records")
+        logger.info(f"✓ Transformed {len(emp_df)} employees")
         return emp_df
-    except Exception as e:
-        log.error(f"✗ Employee transformation failed: {str(e)}")
-        raise
-
-@task(name="Transform Timesheets → SILVER")
-def transform_timesheets(ts_df):
-    """Clean and validate timesheet data"""
-    log = get_run_logger()
-    try:
+    
+    def transform_timesheets(self, ts_df):
+        """Clean & validate timesheet data"""
+        logger.info("🔄 Transforming timesheets...")
+        
+        # Make a copy to avoid SettingWithCopyWarning
+        ts_df = ts_df.copy()
+        
         # Remove duplicates
         ts_df = ts_df.drop_duplicates(subset=['client_employee_id', 'punch_in_datetime'], keep='first')
-        log.info(f"✓ Removed duplicates → {len(ts_df)} records")
         
-        # Fix date columns
+        # Fix datetime columns
         ts_df['punch_apply_date'] = pd.to_datetime(ts_df['punch_apply_date'], errors='coerce')
         ts_df['punch_in_datetime'] = pd.to_datetime(ts_df['punch_in_datetime'], errors='coerce')
         ts_df['punch_out_datetime'] = pd.to_datetime(ts_df['punch_out_datetime'], errors='coerce')
         ts_df['scheduled_start_datetime'] = pd.to_datetime(ts_df['scheduled_start_datetime'], errors='coerce')
         ts_df['scheduled_end_datetime'] = pd.to_datetime(ts_df['scheduled_end_datetime'], errors='coerce')
         
-        # Filter for productivity metrics (normal work only)
-        ts_df['is_normal_work'] = ts_df['pay_code'].str.contains('normal_worked', case=False, na=False).astype(int)
+        # Calculate late/early arrivals (in minutes)
+        ts_df['minutes_late'] = ((ts_df['punch_in_datetime'] - ts_df['scheduled_start_datetime']).dt.total_seconds() / 60).fillna(0)
+        ts_df['minutes_early'] = ((ts_df['scheduled_end_datetime'] - ts_df['punch_out_datetime']).dt.total_seconds() / 60).fillna(0)
         
-        # Calculate late/early
-        ts_df['minutes_late'] = (
-            (ts_df['punch_in_datetime'] - ts_df['scheduled_start_datetime']).dt.total_seconds() / 60
-        ).fillna(0)
-        ts_df['minutes_early'] = (
-            (ts_df['scheduled_end_datetime'] - ts_df['punch_out_datetime']).dt.total_seconds() / 60
-        ).fillna(0)
-        
-        # Mark anomalies (grace period: ±5 min)
+        # Mark anomalies (grace: ±5 min)
         ts_df['is_late'] = (ts_df['minutes_late'] > 5).astype(int)
         ts_df['is_early'] = (ts_df['minutes_early'] > 5).astype(int)
         ts_df['is_overtime'] = (ts_df['hours_worked'] > 8.5).astype(int)
+        ts_df['is_normal_work'] = ((ts_df['hours_worked'] >= 7.5) & (ts_df['hours_worked'] <= 8.5)).astype(int)
         
-        log.info(f"✓ Transformed {len(ts_df)} timesheet records")
+        logger.info(f"✓ Transformed {len(ts_df)} timesheet records")
         return ts_df
-    except Exception as e:
-        log.error(f"✗ Timesheet transformation failed: {str(e)}")
-        raise
-
-@task(name="Load to SILVER")
-def load_to_silver(emp_df, ts_df):
-    """Persist transformed data to SILVER layer"""
-    log = get_run_logger()
-    try:
-        engine = create_engine(config.DATABASE_URL)
+    
+    def load_silver(self, emp_df, ts_df):
+        """Load cleaned data to SILVER layer (DuckDB)"""
+        logger.info("📤 Loading to SILVER layer...")
         
-        emp_df.to_sql('silver_employees', engine, if_exists='replace', index=False)
-        log.info(f"✓ Loaded {len(emp_df)} employees to SILVER")
+        self.conn.register("temp_emp_silver", emp_df)
+        self.conn.execute("CREATE TABLE silver_employees AS SELECT * FROM temp_emp_silver")
+        self.conn.unregister("temp_emp_silver")
+        logger.info(f"✓ Loaded {len(emp_df)} to silver_employees")
         
-        ts_df.to_sql('silver_timesheets', engine, if_exists='replace', index=False, chunksize=5000)
-        log.info(f"✓ Loaded {len(ts_df)} timesheets to SILVER")
+        self.conn.register("temp_ts_silver", ts_df)
+        self.conn.execute("CREATE TABLE silver_timesheets AS SELECT * FROM temp_ts_silver")
+        self.conn.unregister("temp_ts_silver")
+        logger.info(f"✓ Loaded {len(ts_df)} to silver_timesheets")
+    
+    def generate_kpis(self):
+        """Generate all 9 KPI tables in GOLD layer"""
+        logger.info("🏆 Generating KPIs...")
         
-        engine.dispose()
-    except Exception as e:
-        log.error(f"✗ SILVER load failed: {str(e)}")
-        raise
-
-# ==================== KPI GENERATION ====================
-
-@task(name="Generate KPI Tables (GOLD)")
-def generate_kpis():
-    """Execute all 9 KPI queries and populate GOLD layer"""
-    log = get_run_logger()
-    try:
-        engine = create_engine(config.DATABASE_URL)
-        
-        kpi_queries = [
+        kpis = [
             ("kpi_active_headcount", """
                 SELECT 
                     DATE_TRUNC('month', punch_apply_date)::date AS month,
                     COUNT(DISTINCT CASE 
-                        WHEN e.hire_date <= punch_apply_date 
-                        AND (e.term_date IS NULL OR e.term_date > punch_apply_date)
+                        WHEN e.hire_date <= ts.punch_apply_date 
+                        AND (e.term_date IS NULL OR e.term_date > ts.punch_apply_date)
                         THEN e.client_employee_id 
                     END) AS active_headcount
                 FROM silver_timesheets ts
                 CROSS JOIN (SELECT DISTINCT client_employee_id, hire_date, term_date FROM silver_employees) e
                 GROUP BY DATE_TRUNC('month', punch_apply_date)
-                ORDER BY month DESC;
+                ORDER BY month DESC
             """),
             ("kpi_turnover_trend", """
                 SELECT 
@@ -212,7 +148,7 @@ def generate_kpis():
                 FROM silver_employees
                 WHERE term_date IS NOT NULL
                 GROUP BY DATE_TRUNC('month', term_date)
-                ORDER BY month DESC;
+                ORDER BY month DESC
             """),
             ("kpi_avg_tenure", """
                 SELECT 
@@ -222,48 +158,52 @@ def generate_kpis():
                 FROM silver_employees
                 WHERE department_name IS NOT NULL
                 GROUP BY department_name
-                ORDER BY avg_tenure_years DESC;
+                ORDER BY avg_tenure_years DESC
             """),
             ("kpi_avg_working_hours", """
                 SELECT 
                     client_employee_id,
                     DATE_TRUNC('week', punch_apply_date)::date AS week,
-                    ROUND(AVG(hours_worked)::numeric, 2) AS avg_hours,
+                    ROUND(AVG(hours_worked), 2) AS avg_hours,
                     COUNT(*) AS days_worked
                 FROM silver_timesheets
                 WHERE is_normal_work = 1
                 GROUP BY client_employee_id, DATE_TRUNC('week', punch_apply_date)
-                ORDER BY week DESC, avg_hours DESC;
+                ORDER BY week DESC
+                LIMIT 1000
             """),
             ("kpi_late_arrivals", """
                 SELECT 
                     client_employee_id,
-                    COUNT(*) AS late_arrival_count,
-                    ROUND(AVG(minutes_late)::numeric, 2) AS avg_minutes_late
+                    COUNT(*) AS late_count,
+                    ROUND(AVG(minutes_late), 2) AS avg_minutes_late
                 FROM silver_timesheets
-                WHERE is_late = 1 AND is_normal_work = 1
+                WHERE is_late = 1
                 GROUP BY client_employee_id
-                ORDER BY late_arrival_count DESC;
+                ORDER BY late_count DESC
+                LIMIT 100
             """),
             ("kpi_early_departures", """
                 SELECT 
                     client_employee_id,
-                    COUNT(*) AS early_departure_count,
-                    ROUND(AVG(minutes_early)::numeric, 2) AS avg_minutes_early
+                    COUNT(*) AS early_count,
+                    ROUND(AVG(minutes_early), 2) AS avg_minutes_early
                 FROM silver_timesheets
-                WHERE is_early = 1 AND is_normal_work = 1
+                WHERE is_early = 1
                 GROUP BY client_employee_id
-                ORDER BY early_departure_count DESC;
+                ORDER BY early_count DESC
+                LIMIT 100
             """),
             ("kpi_overtime", """
                 SELECT 
                     client_employee_id,
                     COUNT(*) AS overtime_days,
-                    ROUND(SUM(hours_worked - 8)::numeric, 2) AS total_extra_hours
+                    ROUND(SUM(hours_worked - 8), 2) AS total_extra_hours
                 FROM silver_timesheets
-                WHERE is_overtime = 1 AND is_normal_work = 1
+                WHERE is_overtime = 1
                 GROUP BY client_employee_id
-                ORDER BY overtime_days DESC;
+                ORDER BY overtime_days DESC
+                LIMIT 100
             """),
             ("kpi_rolling_avg", """
                 SELECT 
@@ -273,10 +213,10 @@ def generate_kpis():
                         PARTITION BY client_employee_id 
                         ORDER BY punch_apply_date 
                         ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
-                    )::numeric, 2) AS rolling_30day_avg
+                    ), 2) AS rolling_30day_avg
                 FROM silver_timesheets
-                WHERE is_normal_work = 1
-                ORDER BY punch_apply_date DESC;
+                ORDER BY punch_apply_date DESC
+                LIMIT 5000
             """),
             ("kpi_early_attrition", """
                 SELECT 
@@ -291,94 +231,61 @@ def generate_kpis():
                     COUNT(*) AS count
                 FROM silver_employees
                 WHERE term_date IS NOT NULL 
-                AND (term_date - hire_date) >= interval '90 days';
+                AND (term_date - hire_date) >= interval '90 days'
             """),
         ]
         
-        for table_name, query in kpi_queries:
-            log.info(f"Generating {table_name}...")
-            with engine.connect() as conn:
-                conn.execute(text(f"DROP TABLE IF EXISTS {table_name} CASCADE"))
-                conn.execute(text(f"CREATE TABLE {table_name} AS {query}"))
-                result = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
-                count = result.scalar()
-                conn.commit()
-                log.info(f"✓ {table_name}: {count} rows")
+        for table_name, query in kpis:
+            try:
+                self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+                self.conn.execute(f"CREATE TABLE {table_name} AS {query}")
+                count = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchall()[0][0]
+                logger.info(f"✓ {table_name}: {count} rows")
+            except Exception as e:
+                logger.warning(f"⚠️ {table_name}: {str(e)}")
+    
+    def validate_data_quality(self):
+        """Run quality checks"""
+        logger.info("✅ Running data quality checks...")
         
-        engine.dispose()
-    except Exception as e:
-        log.error(f"✗ KPI generation failed: {str(e)}")
-        raise
-
-# ==================== DATA QUALITY CHECKS ====================
-
-@task(name="Data Quality Validation")
-def validate_data_quality():
-    """Run quality checks on loaded data"""
-    log = get_run_logger()
-    try:
-        engine = create_engine(config.DATABASE_URL)
+        emp_count = self.conn.execute("SELECT COUNT(*) FROM silver_employees").fetchall()[0][0]
+        ts_count = self.conn.execute("SELECT COUNT(*) FROM silver_timesheets").fetchall()[0][0]
         
-        with engine.connect() as conn:
-            # Check row counts
-            emp_count = conn.execute(text("SELECT COUNT(*) FROM silver_employees")).scalar()
-            ts_count = conn.execute(text("SELECT COUNT(*) FROM silver_timesheets")).scalar()
-            
-            log.info(f"Quality Check: {emp_count} employees, {ts_count} timesheets")
-            
-            # Check nulls in critical columns
-            null_check = conn.execute(text("""
-                SELECT 
-                    COUNT(*) as total,
-                    COUNT(CASE WHEN client_employee_id IS NULL THEN 1 END) as null_ids,
-                    COUNT(CASE WHEN hire_date IS NULL THEN 1 END) as null_dates
-                FROM silver_employees
-            """)).fetchone()
-            
-            log.info(f"Null check - Total: {null_check[0]}, Null IDs: {null_check[1]}, Null Dates: {null_check[2]}")
-            
-            if null_check[1] > 0:
-                log.warning(f"⚠️ Found {null_check[1]} NULL employee IDs!")
-            
-            log.info("✓ Data quality validation passed")
+        logger.info(f"Data Quality: {emp_count} employees, {ts_count} timesheets")
+    
+    def run(self):
+        """Execute full ETL pipeline"""
+        logger.info("🚀 Starting ETL Pipeline...")
         
-        engine.dispose()
-    except Exception as e:
-        log.error(f"✗ Quality check failed: {str(e)}")
-        raise
+        try:
+            # Extract
+            emp_df = self.extract_employees()
+            ts_df = self.extract_timesheets()
+            
+            # Load Bronze
+            self.load_bronze(emp_df, ts_df)
+            
+            # Transform
+            emp_clean = self.transform_employees(emp_df)
+            ts_clean = self.transform_timesheets(ts_df)
+            
+            # Load Silver
+            self.load_silver(emp_clean, ts_clean)
+            
+            # Quality & KPIs
+            self.validate_data_quality()
+            self.generate_kpis()
+            
+            logger.info("✅ ETL Pipeline completed successfully!")
+            logger.info(f"📊 Database: {config.DB_PATH}")
+            
+        except Exception as e:
+            logger.error(f"❌ Pipeline failed: {str(e)}", exc_info=True)
+            raise
+        finally:
+            self.conn.close()
 
-# ==================== MAIN ORCHESTRATION FLOW ====================
-
-@flow(name="etl-to-insights-pipeline", log_prints=True)
-def etl_pipeline():
-    """Main ETL orchestration with proper task dependencies"""
-    log = get_run_logger()
-    log.info("🚀 Starting ETL Pipeline...")
-    
-    # 1. EXTRACT
-    log.info("Phase 1: EXTRACT")
-    emp_df = extract_employees()
-    ts_df = extract_timesheets()
-    
-    # 2. LOAD BRONZE
-    log.info("Phase 2: LOAD BRONZE")
-    load_to_bronze(emp_df, ts_df)
-    
-    # 3. TRANSFORM
-    log.info("Phase 3: TRANSFORM → SILVER")
-    emp_clean = transform_employees(emp_df)
-    ts_clean = transform_timesheets(ts_df)
-    
-    # 4. LOAD SILVER
-    log.info("Phase 4: LOAD SILVER")
-    load_to_silver(emp_clean, ts_clean)
-    
-    # 5. QUALITY & KPIS
-    log.info("Phase 5: QUALITY CHECKS & KPI GENERATION")
-    validate_data_quality()
-    generate_kpis()
-    
-    log.info("✅ ETL Pipeline completed successfully!")
 
 if __name__ == "__main__":
-    etl_pipeline()
+    pipeline = ETLPipeline()
+    pipeline.run()

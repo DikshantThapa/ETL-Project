@@ -6,3 +6,11 @@ data/raw/*.csv
 .gitignore
 ./gitignore
 ./venv/
+venv/
+data/etl.db
+data/bronze/
+data/silver/
+data/gold/
+__pycache__/
+*.pyc
+reports/
