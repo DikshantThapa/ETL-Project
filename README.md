@@ -1,20 +1,21 @@
 # ETL to Insights: Employee Data Pipeline
 
 **Author:** Dikshant Bikram Thapa  
-**Date:** January 6, 2026  
+**Date:** January, 2026  
 **Architecture:** Medallion Architecture
 
-## 💻 Installation & Setup
+## Installation & Setup
 
 ### Step 1: Clone Repository
 ```bash
 git clone <repo-url>
-cd data-onboarding-etl
+cd ETL-Project
 ```
 
 ### Step 2: Create Virtual Environment
 ```bash
-python3 -m venv venv
+#Make sure that 3.11 version is installed (MANDATORY)
+python3.11 -m venv venv
 source venv/bin/activate
 ```
 
@@ -46,12 +47,8 @@ cp /path/to/timesheet_*.csv data/raw/
 ---
 
 ## 🚀 Running the Pipeline
-### Step 1: Activate Virtual Environment
-```bash
-source venv/bin/activate
-```
 
-### Step 2: Run ETL Pipeline
+### Step 1: Run ETL Pipeline
 ```bash
 python -m src.etl.flows
 ```
@@ -59,11 +56,11 @@ python -m src.etl.flows
 ### Starting the API Server
 
 ```bash
-source venv/bin/activate
 python -m uvicorn src.api.main:app --reload
 ```
 
 ```bash
+curl http://localhost:8000/docs
 curl http://localhost:8000/health
 curl http://localhost:8000/kpis/active-headcount
 curl http://localhost:8000/kpis/turnover
@@ -76,7 +73,7 @@ curl http://localhost:8000/kpis/overtime
 ### Generating Charts
 
 ```bash
-python src/viz/charts.py
+python -m src.viz.charts
 ```
 ### Viewing Charts
 
@@ -86,18 +83,4 @@ open reports/01_active_headcount.html
 open reports/02_turnover_trend.html
 
 ```
----
-
-## 🛠️ Technology Stack
-
-| Component | Technology | Version |
-|-----------|-----------|---------|
-| Language | Python | 3.11 |
-| Data Processing | Pandas | 2.x |
-| Database | DuckDB | Latest |
-| API Framework | FastAPI | Latest |
-| Visualization | Plotly | Latest |
-| Environment | Virtual Environment (venv) | |
-| Version Control | Git | |
-
 ---
