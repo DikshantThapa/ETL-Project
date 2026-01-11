@@ -16,7 +16,7 @@ class ETLPipeline:
     
     def extract_employees(self):
         """Extract employee CSV"""
-        logger.info("📥 Extracting employees...")
+        logger.info("Extracting employees...")
         emp_file = list(config.DATA_RAW_PATH.glob("employee*.csv"))[0]
         df = pd.read_csv(emp_file, sep='|', quotechar='"')
         df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
@@ -25,7 +25,7 @@ class ETLPipeline:
     
     def extract_timesheets(self):
         """Extract & concatenate timesheet CSVs"""
-        logger.info("📥 Extracting timesheets...")
+        logger.info("Extracting timesheets...")
         ts_files = sorted(config.DATA_RAW_PATH.glob("timesheet*.csv"))
         logger.info(f"Found {len(ts_files)} timesheet files: {[f.name for f in ts_files]}")
         
@@ -43,7 +43,7 @@ class ETLPipeline:
     
     def load_bronze(self, emp_df, ts_df):
         """Load raw data to BRONZE layer (DuckDB)"""
-        logger.info("📤 Loading to BRONZE layer...")
+        logger.info("Loading to BRONZE layer...")
         self.conn.execute("DROP TABLE IF EXISTS bronze_employees")
         self.conn.execute("DROP TABLE IF EXISTS bronze_timesheets")
         
@@ -59,7 +59,7 @@ class ETLPipeline:
     
     def transform_employees(self, emp_df):
         """Clean & validate employee data"""
-        logger.info("🔄 Transforming employees...")
+        logger.info("Transforming employees...")
         
         # Make a copy to avoid SettingWithCopyWarning
         emp_df = emp_df.copy()
@@ -81,7 +81,7 @@ class ETLPipeline:
     
     def transform_timesheets(self, ts_df):
         """Clean & validate timesheet data"""
-        logger.info("🔄 Transforming timesheets...")
+        logger.info("Transforming timesheets...")
         
         # Make a copy to avoid SettingWithCopyWarning
         ts_df = ts_df.copy()
@@ -111,7 +111,7 @@ class ETLPipeline:
     
     def load_silver(self, emp_df, ts_df):
         """Load cleaned data to SILVER layer (DuckDB)"""
-        logger.info("📤 Loading to SILVER layer...")
+        logger.info("Loading to SILVER layer...")
         
         self.conn.register("temp_emp_silver", emp_df)
         self.conn.execute("CREATE TABLE silver_employees AS SELECT * FROM temp_emp_silver")
@@ -125,7 +125,7 @@ class ETLPipeline:
     
     def generate_kpis(self):
         """Generate all 9 KPI tables in GOLD layer"""
-        logger.info("🏆 Generating KPIs...")
+        logger.info("Generating KPIs...")
         
         kpis = [
             ("kpi_active_headcount", """
@@ -242,11 +242,11 @@ class ETLPipeline:
                 count = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchall()[0][0]
                 logger.info(f"✓ {table_name}: {count} rows")
             except Exception as e:
-                logger.warning(f"⚠️ {table_name}: {str(e)}")
+                logger.warning(f"{table_name}: {str(e)}")
     
     def validate_data_quality(self):
         """Run quality checks"""
-        logger.info("✅ Running data quality checks...")
+        logger.info("Running data quality checks...")
         
         emp_count = self.conn.execute("SELECT COUNT(*) FROM silver_employees").fetchall()[0][0]
         ts_count = self.conn.execute("SELECT COUNT(*) FROM silver_timesheets").fetchall()[0][0]
@@ -255,7 +255,7 @@ class ETLPipeline:
     
     def run(self):
         """Execute full ETL pipeline"""
-        logger.info("🚀 Starting ETL Pipeline...")
+        logger.info("Starting ETL Pipeline...")
         
         try:
             # Extract
@@ -276,11 +276,11 @@ class ETLPipeline:
             self.validate_data_quality()
             self.generate_kpis()
             
-            logger.info("✅ ETL Pipeline completed successfully!")
-            logger.info(f"📊 Database: {config.DB_PATH}")
+            logger.info("ETL Pipeline completed successfully!")
+            logger.info(f"Database: {config.DB_PATH}")
             
         except Exception as e:
-            logger.error(f"❌ Pipeline failed: {str(e)}", exc_info=True)
+            logger.error(f"Pipeline failed: {str(e)}", exc_info=True)
             raise
         finally:
             self.conn.close()

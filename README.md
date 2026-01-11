@@ -40,7 +40,7 @@ JWT_SECRET=your-secret-key-change-in-production
 EOF
 ```
 
-### Step 5: Prepare Data Directory (OPTIONAL : if have data loaded)
+### Step 5: Prepare Data Directory (OPTIONAL : if you have already loaded the data somewhere)
 ```bash
 mkdir -p data/raw data/bronze data/silver data/gold
 # Copy CSV files to data/raw/
