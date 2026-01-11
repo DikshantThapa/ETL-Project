@@ -76,6 +76,49 @@ def get_attrition():
     conn.close()
     return {"data": data}
 
+@app.get("/kpis/avg-working-hours")
+def get_avg_working_hours():
+    conn = get_db()
+    result = conn.execute("SELECT * FROM kpi_avg_working_hours ORDER BY week DESC LIMIT 20").fetchall()
+    columns = ["clientemployeeid", "week", "avghours", "daysworked"]
+    data = [dict(zip(columns, row)) for row in result]
+    conn.close()
+    return {"data": data}
+
+
+@app.get("/kpis/early-departures")
+def get_early_departures():
+    conn = get_db()
+    result = conn.execute("""
+        SELECT 
+            client_employee_id,
+            early_count,
+            ROUND(avg_minutes_early, 2) AS avg_minutes_early
+        FROM kpi_early_departures
+        ORDER BY early_count DESC
+        LIMIT 20
+    """).fetchall()
+    data = [dict(zip(["employee_id", "early_count", "avg_min_early"], row)) for row in result]
+    conn.close()
+    return {"data": data, "kpi": "Early Departure Count (>5min grace)"}
+
+@app.get("/kpis/rolling-avg-hours")
+def get_rolling_avg_hours():
+    conn = get_db()
+    result = conn.execute("""
+        SELECT 
+            client_employee_id,
+            punch_apply_date,
+            ROUND(rolling30dayavg, 2) AS rolling30dayavg
+        FROM kpi_rolling_avg
+        ORDER BY punch_apply_date DESC
+        LIMIT 50
+    """).fetchall()
+    data = [dict(zip(["employee_id", "date", "rolling_30d_avg"], row)) for row in result]
+    conn.close()
+    return {"data": data, "kpi": "Rolling Average Hours (30-day window)"}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

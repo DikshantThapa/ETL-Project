@@ -37,7 +37,7 @@ JWT_SECRET=your-secret-key-change-in-production
 EOF
 ```
 
-### Step 5: Prepare Data Directory
+### Step 5: Prepare Data Directory (OPTIONAL : if have data loaded)
 ```bash
 mkdir -p data/raw data/bronze data/silver data/gold
 # Copy CSV files to data/raw/
@@ -46,7 +46,7 @@ cp /path/to/timesheet_*.csv data/raw/
 ```
 ---
 
-## 🚀 Running the Pipeline
+## Running the Pipeline
 
 ### Step 1: Run ETL Pipeline
 ```bash
@@ -67,8 +67,9 @@ curl http://localhost:8000/kpis/turnover
 curl http://localhost:8000/kpis/tenure
 curl http://localhost:8000/kpis/late-arrivals
 curl http://localhost:8000/kpis/overtime
+and more...
 ```
-## 📊 Visualizations
+## Visualizations
 
 ### Generating Charts
 
