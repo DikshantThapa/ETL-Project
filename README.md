@@ -15,7 +15,10 @@ cd ETL-Project
 ### Step 2: Create Virtual Environment
 ```bash
 #Make sure that 3.11 version is installed (MANDATORY)
-python3.11 -m venv venv
+python3.11 -m venv venv 
+#python -m venv venv may cause problem in pendulum and prefect module conflicts in other than python 3.11
+#if already 3.11 is installed
+python -m venv venv can work
 source venv/bin/activate
 ```
 
