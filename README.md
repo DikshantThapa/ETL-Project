@@ -15,7 +15,10 @@ cd ETL-Project
 ### Step 2: Create Virtual Environment
 ```bash
 #Make sure that 3.11 version is installed (MANDATORY)
-python3.11 -m venv venv
+python3.11 -m venv venv 
+#python -m venv venv may cause problem in pendulum and prefect module conflicts in other than python 3.11
+#if already 3.11 is installed
+python -m venv venv can work
 source venv/bin/activate
 ```
 
@@ -37,7 +40,7 @@ JWT_SECRET=your-secret-key-change-in-production
 EOF
 ```
 
-### Step 5: Prepare Data Directory (OPTIONAL : if have data loaded)
+### Step 5: Prepare Data Directory (OPTIONAL : if you have already loaded the data somewhere)
 ```bash
 mkdir -p data/raw data/bronze data/silver data/gold
 # Copy CSV files to data/raw/

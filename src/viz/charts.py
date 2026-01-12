@@ -113,7 +113,7 @@ def generate_charts():
             print("✓ Generated: 09_rolling_avg_hours.html")
     
     conn.close()
-    print("\n✅ All 9 visualizations generated in reports/ folder!")
+    print("\nAll 9 visualizations generated in reports/ folder!")
 
 if __name__ == "__main__":
     generate_charts()
