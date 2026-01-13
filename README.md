@@ -19,7 +19,8 @@ python3.11 -m venv venv
 #python -m venv venv may cause problem in pendulum and prefect module conflicts in other than python 3.11
 #if already 3.11 is installed
 python -m venv venv can work
-source venv/bin/activate
+#⚠️ Python versions other than 3.11 may cause dependency conflicts (Prefect / Pendulum).
+source venv/bin/activate        # Windows: venv\Scripts\activate
 ```
 
 ### Step 3: Install Dependencies
@@ -60,16 +61,28 @@ python -m src.etl.flows
 
 ```bash
 python -m uvicorn src.api.main:app --reload
+or
+python src/api/main.py
 ```
+### Bearer TOKEN
 
 ```bash
-curl http://localhost:8000/docs
-curl http://localhost:8000/health
-curl http://localhost:8000/kpis/active-headcount
-curl http://localhost:8000/kpis/turnover
-curl http://localhost:8000/kpis/tenure
-curl http://localhost:8000/kpis/late-arrivals
-curl http://localhost:8000/kpis/overtime
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"leapfrog","password":"leapfrog"}' | jq -r .access_token)
+
+echo "Token: $TOKEN"
+# you get something like eyJhbGciOiJIUz.........
+```
+
+### Swagger UI
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/health
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/employees/
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/kpis/active-headcount
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8000/timesheets/?client_employee_id=401114"
+
 and more...
 ```
 ## Visualizations
